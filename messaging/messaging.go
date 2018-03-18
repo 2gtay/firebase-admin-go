@@ -36,33 +36,66 @@ const (
 	iidEndpoint       = "https://iid.googleapis.com"
 	iidSubscribe      = "iid/v1:batchAdd"
 	iidUnsubscribe    = "iid/v1:batchRemove"
+
+	fcmErrorType = "type.googleapis.com/google.firebase.fcm.v1.FcmErrorCode"
+
+	// InternalError indicates that a backend server encountered an internal error.
+	InternalError = "internal-error"
+
+	// InvalidAPNSCredentialsError indicates that FCM failed to authenticate with APNS.
+	InvalidAPNSCredentialsError = "invalid-apns-credentials"
+
+	// InvalidArgumentError indicates that a request to a backend service contained one or more
+	// invalid arguments.
+	InvalidArgumentError = "invalid-argument"
+
+	// MessageRateExceededError indicates that the client has exceeded the quota for sending FCM
+	// messages.
+	MessageRateExceededError = "message-rate-exceeded"
+
+	// MismatchedCredentialError indicates that the credential used to send the message does not
+	// belong to the same project as the target registration token.
+	MismatchedCredentialError = "mismatched-credential"
+
+	// RegistrationTokenNotRegisteredError indicates that the registration token used to send the
+	// message is no longer registered.
+	RegistrationTokenNotRegisteredError = "registration-token-not-registered"
+
+	// ServerUnavailableError indicates that the backend FCM servers are temporarily unavailable.
+	ServerUnavailableError = "server-unavailable"
+
+	// TooManyTopicsError indicates that the client has exceeded the number of allowed FCM topics.
+	TooManyTopicsError = "too-many-topics"
+
+	// UnknownError indicates that a backend server responded with an unexpected error.
+	UnknownError = "unknown-error"
 )
 
 var (
 	topicNamePattern = regexp.MustCompile("^(/topics/)?(private/)?[a-zA-Z0-9-_.~%]+$")
 
-	fcmErrorCodes = map[string]string{
+	fcmErrorCodes = map[string]struct{ Code, Message string }{
 		// FCM v1 canonical error codes
-		"NOT_FOUND":          "app instance has been unregistered; code: registration-token-not-registered",
-		"PERMISSION_DENIED":  "sender id does not match regisration token; code: mismatched-credential",
-		"RESOURCE_EXHAUSTED": "messaging service quota exceeded; code: message-rate-exceeded",
-		"UNAUTHENTICATED":    "apns certificate or auth key was invalid; code: invalid-apns-credentials",
+		"NOT_FOUND":          {RegistrationTokenNotRegisteredError, "app instance has been unregistered"},
+		"PERMISSION_DENIED":  {MismatchedCredentialError, "sender id does not match regisration token"},
+		"RESOURCE_EXHAUSTED": {MessageRateExceededError, "messaging service quota exceeded"},
+		"UNAUTHENTICATED":    {InvalidAPNSCredentialsError, "apns certificate or auth key was invalid"},
 
 		// FCM v1 new error codes
-		"APNS_AUTH_ERROR":    "apns certificate or auth key was invalid; code: invalid-apns-credentials",
-		"INTERNAL":           "back servers encountered an unknown internl error; code: internal-error",
-		"INVALID_ARGUMENT":   "request contains an invalid argument; code: invalid-argument",
-		"SENDER_ID_MISMATCH": "sender id does not match regisration token; code: mismatched-credential",
-		"QUOTA_EXCEEDED":     "messaging service quota exceeded; code: message-rate-exceeded",
-		"UNAVAILABLE":        "backend servers are temporarily unavailable; code: server-unavailable",
-		"UNREGISTERED":       "app instance has been unregistered; code: registration-token-not-registered",
+		"APNS_AUTH_ERROR":    {InvalidAPNSCredentialsError, "apns certificate or auth key was invalid"},
+		"INTERNAL":           {InternalError, "backend servers encountered an internl error"},
+		"INVALID_ARGUMENT":   {InvalidArgumentError, "request contains an invalid argument"},
+		"SENDER_ID_MISMATCH": {MismatchedCredentialError, "sender id does not match regisration token"},
+		"QUOTA_EXCEEDED":     {MessageRateExceededError, "messaging service quota exceeded"},
+		"UNAVAILABLE":        {ServerUnavailableError, "backend servers are temporarily unavailable"},
+		"UNREGISTERED":       {RegistrationTokenNotRegisteredError, "app instance has been unregistered"},
 	}
 
-	iidErrorCodes = map[string]string{
-		"INVALID_ARGUMENT": "request contains an invalid argument; code: invalid-argument",
-		"NOT_FOUND":        "request contains an invalid argument; code: registration-token-not-registered",
-		"INTERNAL":         "server encountered an internal error; code: internal-error",
-		"TOO_MANY_TOPICS":  "client exceeded the number of allowed topics; code: too-many-topics",
+	iidErrorCodes = map[string]struct{ Code, Message string }{
+		"INVALID_ARGUMENT": {InvalidArgumentError, "request contains an invalid argument"},
+		"NOT_FOUND":        {RegistrationTokenNotRegisteredError, "provided registration token is not registered"},
+		"INTERNAL":         {InternalError, "server encountered an internal error"},
+		"TOO_MANY_TOPICS":  {TooManyTopicsError, "client exceeded the number of allowed topics"},
 	}
 )
 
@@ -264,6 +297,7 @@ type ApsAlert struct {
 // ErrorInfo is a topic management error.
 type ErrorInfo struct {
 	Index  int
+	Code   string
 	Reason string
 }
 
@@ -285,13 +319,17 @@ func newTopicManagementResponse(resp *iidResponse) *TopicManagementResponse {
 			tmr.SuccessCount++
 		} else {
 			tmr.FailureCount++
-			code := res["error"].(string)
-			reason := iidErrorCodes[code]
-			if reason == "" {
-				reason = "unknown-error"
+			info, ok := iidErrorCodes[res["error"].(string)]
+			var code, reason string
+			if ok {
+				code, reason = info.Code, info.Message
+			} else {
+				code = UnknownError
+				reason = "server responded with an unknown error"
 			}
 			tmr.Errors = append(tmr.Errors, &ErrorInfo{
 				Index:  idx,
+				Code:   code,
 				Reason: reason,
 			})
 		}
@@ -375,14 +413,24 @@ type fcmRequest struct {
 	Message      *Message `json:"message,omitempty"`
 }
 
-type fcmResponse struct {
-	Name string `json:"name"`
-}
-
 type fcmError struct {
 	Error struct {
-		Status string `json:"status"`
+		Status  string `json:"status"`
+		Message string `json:"message"`
+		Details []struct {
+			Type string `json:"@type"`
+			Code string `json:"code"`
+		} `json:"details"`
 	} `json:"error"`
+}
+
+func (fe *fcmError) Code() string {
+	for _, d := range fe.Error.Details {
+		if d.Type == fcmErrorType {
+			return d.Code
+		}
+	}
+	return fe.Error.Status
 }
 
 type iidRequest struct {
@@ -393,10 +441,6 @@ type iidRequest struct {
 
 type iidResponse struct {
 	Results []map[string]interface{} `json:"results"`
-}
-
-type iidError struct {
-	Error string `json:"error"`
 }
 
 func (c *Client) makeSendRequest(ctx context.Context, req *fcmRequest) (string, error) {
@@ -415,18 +459,27 @@ func (c *Client) makeSendRequest(ctx context.Context, req *fcmRequest) (string, 
 	}
 
 	if resp.Status == http.StatusOK {
-		var result fcmResponse
+		var result struct {
+			Name string `json:"name"`
+		}
 		err := json.Unmarshal(resp.Body, &result)
 		return result.Name, err
 	}
 
 	var fe fcmError
 	json.Unmarshal(resp.Body, &fe) // ignore any json parse errors at this level
-	msg := fcmErrorCodes[fe.Error.Status]
-	if msg == "" {
+	info, ok := fcmErrorCodes[fe.Code()]
+	var code, msg string
+	if ok {
+		code, msg = info.Code, info.Message
+		if fe.Error.Message != "" {
+			msg += "; details: " + fe.Error.Message
+		}
+	} else {
+		code = UnknownError
 		msg = fmt.Sprintf("server responded with an unknown error; response: %s", string(resp.Body))
 	}
-	return "", fmt.Errorf("http error status: %d; reason: %s", resp.Status, msg)
+	return "", internal.Errorf(code, "http error status: %d; reason: %s", resp.Status, msg)
 }
 
 func (c *Client) makeTopicManagementRequest(ctx context.Context, req *iidRequest) (*TopicManagementResponse, error) {
@@ -472,11 +525,17 @@ func (c *Client) makeTopicManagementRequest(ctx context.Context, req *iidRequest
 		return newTopicManagementResponse(&result), nil
 	}
 
-	var ie iidError
-	json.Unmarshal(resp.Body, &ie) // ignore any json parse errors at this level
-	msg := iidErrorCodes[ie.Error]
-	if msg == "" {
-		msg = fmt.Sprintf("client encountered an unknown error; response: %s", string(resp.Body))
+	var ie struct {
+		Error string `json:"error"`
 	}
-	return nil, fmt.Errorf("http error status: %d; reason: %s", resp.Status, msg)
+	json.Unmarshal(resp.Body, &ie) // ignore any json parse errors at this level
+	info, ok := iidErrorCodes[ie.Error]
+	var code, msg string
+	if ok {
+		code, msg = info.Code, info.Message
+	} else {
+		code = UnknownError
+		msg = fmt.Sprintf("server responded with an unknown error; response: %s", string(resp.Body))
+	}
+	return nil, internal.Errorf(code, "http error status: %d; reason: %s", resp.Status, msg)
 }

@@ -16,6 +16,8 @@
 package internal
 
 import (
+	"fmt"
+
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
@@ -59,16 +61,32 @@ type StorageConfig struct {
 	Bucket string
 }
 
-// MockTokenSource is a TokenSource implementation that can be used for testing.
-type MockTokenSource struct {
-	AccessToken string
-}
-
 // MessagingConfig represents the configuration of Firebase Cloud Messaging service.
 type MessagingConfig struct {
 	Opts      []option.ClientOption
 	ProjectID string
 	Version   string
+}
+
+type FirebaseError struct {
+	Code   string
+	String string
+}
+
+func (fe *FirebaseError) Error() string {
+	return fe.String
+}
+
+func Errorf(code string, msg string, args ...interface{}) *FirebaseError {
+	return &FirebaseError{
+		Code:   code,
+		String: fmt.Sprintf(msg, args...),
+	}
+}
+
+// MockTokenSource is a TokenSource implementation that can be used for testing.
+type MockTokenSource struct {
+	AccessToken string
 }
 
 // Token returns the test token associated with the TokenSource.

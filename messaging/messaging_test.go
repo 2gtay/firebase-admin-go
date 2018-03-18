@@ -26,6 +26,7 @@ import (
 
 	"golang.org/x/net/context"
 
+	firebase "firebase.google.com/go"
 	"firebase.google.com/go/internal"
 	"google.golang.org/api/option"
 )
@@ -620,29 +621,47 @@ func TestSendError(t *testing.T) {
 	cases := []struct {
 		resp string
 		want string
+		code string
 	}{
 		{
 			resp: "{}",
 			want: "http error status: 500; reason: server responded with an unknown error; response: {}",
+			code: UnknownError,
 		},
 		{
-			resp: "{\"error\": {\"status\": \"INVALID_ARGUMENT\", \"message\": \"test error\"}}",
-			want: "http error status: 500; reason: request contains an invalid argument; code: invalid-argument",
+			resp: `{"error": {"status": "INVALID_ARGUMENT", "message": "test error"}}`,
+			want: "http error status: 500; reason: request contains an invalid argument; details: test error",
+			code: InvalidArgumentError,
 		},
 		{
-			resp: "{\"error\": {\"status\": \"NOT_FOUND\", \"message\": \"test error\"}}",
-			want: "http error status: 500; reason: app instance has been unregistered; code: registration-token-not-registered",
+			resp: `{"error": {"status": "NOT_FOUND", "message": "test error", "details": [{
+				"@type": "type.googleapis.com/google.firebase.fcm.v1.FcmErrorCode",
+				"code": "UNREGISTERED"
+			}]}}`,
+			want: "http error status: 500; reason: app instance has been unregistered; details: test error",
+			code: RegistrationTokenNotRegisteredError,
+		},
+		{
+			resp: `{"error": {"status": "NOT_FOUND", "message": "test error"}}`,
+			want: "http error status: 500; reason: app instance has been unregistered; details: test error",
+			code: RegistrationTokenNotRegisteredError,
 		},
 		{
 			resp: "not json",
 			want: "http error status: 500; reason: server responded with an unknown error; response: not json",
+			code: UnknownError,
 		},
 	}
 	for _, tc := range cases {
 		resp = tc.resp
 		name, err := client.Send(ctx, &Message{Topic: "topic"})
-		if err == nil || err.Error() != tc.want {
-			t.Errorf("Send() = (%q, %v); want = (%q, %q)", name, err, "", tc.want)
+		if err != nil {
+			code := firebase.Code(err)
+			if code != tc.code || err.Error() != tc.want {
+				t.Errorf("Send() = {%q, %q}; want = {%q, %q}", code, err, tc.code, tc.want)
+			}
+		} else {
+			t.Errorf("Send() = (%q, nil); want = (%q, error)", name, "")
 		}
 	}
 }
@@ -763,15 +782,15 @@ func TestTopicManagementError(t *testing.T) {
 	}{
 		{
 			resp: "{}",
-			want: "http error status: 500; reason: client encountered an unknown error; response: {}",
+			want: "http error status: 500; reason: server responded with an unknown error; response: {}",
 		},
 		{
 			resp: "{\"error\": \"INVALID_ARGUMENT\"}",
-			want: "http error status: 500; reason: request contains an invalid argument; code: invalid-argument",
+			want: "http error status: 500; reason: request contains an invalid argument",
 		},
 		{
 			resp: "not json",
-			want: "http error status: 500; reason: client encountered an unknown error; response: not json",
+			want: "http error status: 500; reason: server responded with an unknown error; response: not json",
 		},
 	}
 	for _, tc := range cases {
@@ -858,7 +877,7 @@ func checkTopicMgtResponse(t *testing.T, resp *TopicManagementResponse) {
 	if e.Index != 1 {
 		t.Errorf("ErrorInfo.Index = %d; want = %d", e.Index, 1)
 	}
-	if e.Reason != "unknown-error" {
-		t.Errorf("ErrorInfo.Reason = %s; want = %s", e.Reason, "unknown-error")
+	if e.Code != "unknown-error" {
+		t.Errorf("ErrorInfo.Reason = %s; want = %s", e.Code, "unknown-error")
 	}
 }
