@@ -28,7 +28,6 @@ import (
 
 	"golang.org/x/net/context"
 
-	firebase "firebase.google.com/go"
 	"firebase.google.com/go/internal"
 
 	"golang.org/x/oauth2"
@@ -152,19 +151,19 @@ func TestGetNonExistingUser(t *testing.T) {
 
 	we := `cannot find user from uid: "id-nonexisting"`
 	user, err := s.Client.GetUser(context.Background(), "id-nonexisting")
-	if user != nil || err == nil || err.Error() != we || firebase.Code(err) != UserNotFoundError {
+	if user != nil || err == nil || err.Error() != we || internal.Code(err) != UserNotFoundError {
 		t.Errorf("GetUser(non-existing) = (%v, %q); want = (nil, %q)", user, err, we)
 	}
 
 	we = `cannot find user from email: "foo@bar.nonexisting"`
 	user, err = s.Client.GetUserByEmail(context.Background(), "foo@bar.nonexisting")
-	if user != nil || err == nil || err.Error() != we || firebase.Code(err) != UserNotFoundError {
+	if user != nil || err == nil || err.Error() != we || internal.Code(err) != UserNotFoundError {
 		t.Errorf("GetUserByEmail(non-existing) = (%v, %q); want = (nil, %q)", user, err, we)
 	}
 
 	we = `cannot find user from phone number: "+12345678901"`
 	user, err = s.Client.GetUserByPhoneNumber(context.Background(), "+12345678901")
-	if user != nil || err == nil || err.Error() != we || firebase.Code(err) != UserNotFoundError {
+	if user != nil || err == nil || err.Error() != we || internal.Code(err) != UserNotFoundError {
 		t.Errorf("GetUserByPhoneNumber(non-existing) = (%v, %q); want = (nil, %q)", user, err, we)
 	}
 }
@@ -702,7 +701,7 @@ func TestHTTPError(t *testing.T) {
 	}
 
 	want := `server responded with an unknown error; googleapi: got HTTP response code 500 with body: {"error":"test"}`
-	if firebase.Code(err) != UnknownError || err.Error() != want {
+	if internal.Code(err) != UnknownError || err.Error() != want {
 		t.Errorf("GetUser() = %v; want = %q", err, want)
 	}
 }
@@ -719,7 +718,7 @@ func TestHTTPErrorWithCode(t *testing.T) {
 
 	want := `the credential used to initialize the Admin SDK has insufficient permission to access ` +
 		`the requested resource; googleapi: Error 500: INSUFFICIENT_PERMISSION`
-	if firebase.Code(err) != InsufficientPermissionError || err.Error() != want {
+	if internal.Code(err) != InsufficientPermissionError || err.Error() != want {
 		t.Errorf("GetUser() = %v; want = %q", err, want)
 	}
 }

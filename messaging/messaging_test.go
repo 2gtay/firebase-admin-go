@@ -26,7 +26,6 @@ import (
 
 	"golang.org/x/net/context"
 
-	firebase "firebase.google.com/go"
 	"firebase.google.com/go/internal"
 	"google.golang.org/api/option"
 )
@@ -656,7 +655,7 @@ func TestSendError(t *testing.T) {
 		resp = tc.resp
 		name, err := client.Send(ctx, &Message{Topic: "topic"})
 		if err != nil {
-			code := firebase.Code(err)
+			code := internal.Code(err)
 			if code != tc.code || err.Error() != tc.want {
 				t.Errorf("Send() = {%q, %q}; want = {%q, %q}", code, err, tc.code, tc.want)
 			}

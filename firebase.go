@@ -173,10 +173,7 @@ func NewApp(ctx context.Context, config *Config, opts ...option.ClientOption) (*
 //
 // If the error does not contain an error code, this function returns an empty string.
 func Code(err error) string {
-	if fe, ok := err.(*internal.FirebaseError); ok {
-		return fe.Code
-	}
-	return ""
+	return internal.Code(err)
 }
 
 // getConfigDefaults reads the default config file, defined by the FIREBASE_CONFIG
