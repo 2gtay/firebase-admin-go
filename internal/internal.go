@@ -78,12 +78,17 @@ func (fe *FirebaseError) Error() string {
 	return fe.String
 }
 
-// Errorf creates a new FirebaseError from the specified error code and message.
-func Errorf(code string, msg string, args ...interface{}) *FirebaseError {
+// Error creates a new FirebaseError from the specified error code and message.
+func Error(code string, msg string) *FirebaseError {
 	return &FirebaseError{
 		Code:   code,
-		String: fmt.Sprintf(msg, args...),
+		String: msg,
 	}
+}
+
+// Errorf creates a new FirebaseError from the specified error code and message.
+func Errorf(code string, msg string, args ...interface{}) *FirebaseError {
+	return Error(code, fmt.Sprintf(msg, args...))
 }
 
 // Code extracts the error code from the given error.

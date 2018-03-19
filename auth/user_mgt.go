@@ -639,7 +639,7 @@ func (c *Client) getUser(ctx context.Context, request *identitytoolkit.Identityt
 			msg = fmt.Sprintf("cannot find user given params: id: %v, phone: %v, email: %v",
 				request.LocalId, request.PhoneNumber, request.Email)
 		}
-		return nil, internal.Errorf(UserNotFoundError, msg)
+		return nil, internal.Error(UserNotFoundError, msg)
 	}
 
 	eu, err := makeExportedUser(resp.Users[0])
