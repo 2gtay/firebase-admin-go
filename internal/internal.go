@@ -68,6 +68,7 @@ type MessagingConfig struct {
 	Version   string
 }
 
+// FirebaseError is an error type containing an error code string.
 type FirebaseError struct {
 	Code   string
 	String string
@@ -77,6 +78,7 @@ func (fe *FirebaseError) Error() string {
 	return fe.String
 }
 
+// Errorf creates a new FirebaseError from the specified error code and message.
 func Errorf(code string, msg string, args ...interface{}) *FirebaseError {
 	return &FirebaseError{
 		Code:   code,

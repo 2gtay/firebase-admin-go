@@ -23,16 +23,78 @@ import (
 	"strings"
 	"time"
 
+	"firebase.google.com/go/internal"
+
 	"golang.org/x/net/context"
 
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/identitytoolkit/v3"
 	"google.golang.org/api/iterator"
 )
 
-const maxReturnedResults = 1000
-const maxLenPayloadCC = 1000
+const (
+	maxReturnedResults = 1000
+	maxLenPayloadCC    = 1000
+	defaultProviderID  = "firebase"
 
-const defaultProviderID = "firebase"
+	// EmailAlreadyExistsError indicates that a user account with the same email address already
+	// exists, which prevents assigning it to other accounts.
+	EmailAlreadyExistsError = "email-already-exists"
+
+	// InsufficientPermissionError indicates that the client does not have permission to perform a
+	// user management operation.
+	InsufficientPermissionError = "insufficient-permission"
+
+	// PhoneNumberAlreadyExistsError indicates that a user account with the same phone number already
+	// exists, which prevents assigning it to other accounts.
+	PhoneNumberAlreadyExistsError = "phone-number-already-exists"
+
+	// ProjectNotFoundError indicates that the credential used to initialize the SDK does not belong
+	// to a valid Firebase project.
+	ProjectNotFoundError = "project-not-found"
+
+	// UIDAlreadyExistsError indicates that a user account with the same user ID already
+	// exists, which prevents assigning it to other accounts.
+	UIDAlreadyExistsError = "uid-already-exists"
+
+	// UnknownError indicates that the backend server responded with an unexpected error.
+	UnknownError = "unknown-error"
+
+	// UserNotFoundError indicates that no user account could be found for given identifier (UID,
+	// email or phone number).
+	UserNotFoundError = "user-not-found"
+)
+
+var serverError = map[string]struct{ Code, Message string }{
+	"CONFIGURATION_NOT_FOUND": {
+		ProjectNotFoundError,
+		"no Firebase project was found for the credential used to initialize the Admin SDKs",
+	},
+	"DUPLICATE_EMAIL": {
+		EmailAlreadyExistsError,
+		"provided email is alreday in use by an existing user",
+	},
+	"DUPLICATE_LOCAL_ID": {
+		UIDAlreadyExistsError,
+		"provided uid is alreday in use by an existing user",
+	},
+	"EMAIL_EXISTS": {
+		EmailAlreadyExistsError,
+		"provided email is alreday in use by an existing user",
+	},
+	"INSUFFICIENT_PERMISSION": {
+		InsufficientPermissionError,
+		"the credential used to initialize the Admin SDK has insufficient permission to access the requested resource",
+	},
+	"PHONE_NUMBER_EXISTS": {
+		PhoneNumberAlreadyExistsError,
+		"provided phone number is already in use by an existing user",
+	},
+	"PROJECT_NOT_FOUND": {
+		ProjectNotFoundError,
+		"no Firebase project was found for the credential used to initialize the Admin SDKs",
+	},
+}
 
 var commonValidators = map[string]func(interface{}) error{
 	"displayName": validateDisplayName,
@@ -215,8 +277,10 @@ func (c *Client) DeleteUser(ctx context.Context, uid string) error {
 
 	call := c.is.Relyingparty.DeleteAccount(request)
 	c.setHeader(call)
-	_, err := call.Context(ctx).Do()
-	return err
+	if _, err := call.Context(ctx).Do(); err != nil {
+		return handleServerError(err)
+	}
+	return nil
 }
 
 // GetUser gets the user data corresponding to the specified user ID.
@@ -279,7 +343,7 @@ func (it *UserIterator) fetch(pageSize int, pageToken string) (string, error) {
 	it.client.setHeader(call)
 	resp, err := call.Context(it.ctx).Do()
 	if err != nil {
-		return "", err
+		return "", handleServerError(err)
 	}
 
 	for _, u := range resp.Users {
@@ -339,37 +403,36 @@ func addToListParam(p map[string]interface{}, listname, param string) {
 	}
 }
 
-func processClaims(p map[string]interface{}) error {
+func processClaims(p map[string]interface{}) (string, error) {
 	cc, ok := p["customClaims"]
 	if !ok {
-		return nil
+		return "", nil
 	}
 
 	claims, ok := cc.(map[string]interface{})
 	if !ok {
-		return fmt.Errorf("unexpected type for custom claims")
+		return "", fmt.Errorf("unexpected type for custom claims")
 	}
 	for _, key := range reservedClaims {
 		if _, ok := claims[key]; ok {
-			return fmt.Errorf("claim %q is reserved and must not be set", key)
+			return "", fmt.Errorf("claim %q is reserved and must not be set", key)
 		}
 	}
 
 	b, err := json.Marshal(claims)
 	if err != nil {
-		return fmt.Errorf("custom claims marshaling error: %v", err)
+		return "", fmt.Errorf("custom claims marshaling error: %v", err)
 	}
 	s := string(b)
 	if s == "null" {
 		s = "{}"
 	}
 	if len(s) > maxLenPayloadCC {
-		return fmt.Errorf("serialized custom claims must not exceed %d characters", maxLenPayloadCC)
+		return "", fmt.Errorf("serialized custom claims must not exceed %d characters", maxLenPayloadCC)
 	}
 
-	p["customAttributes"] = s
 	delete(p, "customClaims")
-	return nil
+	return s, nil
 }
 
 // Validators.
@@ -470,13 +533,11 @@ func (u *UserToUpdate) preparePayload(user *identitytoolkit.IdentitytoolkitRelyi
 	processDeletion(params, "photoUrl", "deleteAttribute", "PHOTO_URL")
 	processDeletion(params, "phoneNumber", "deleteProvider", "phone")
 
-	if err := processClaims(params); err != nil {
+	cc, err := processClaims(params)
+	if err != nil {
 		return err
 	}
-
-	if params["customAttributes"] != nil {
-		user.CustomAttributes = params["customAttributes"].(string)
-	}
+	user.CustomAttributes = cc
 
 	for key, validate := range commonValidators {
 		if v, ok := params[key]; ok {
@@ -523,7 +584,6 @@ func (c *Client) createUser(ctx context.Context, user *UserToCreate) (string, er
 	}
 
 	request := &identitytoolkit.IdentitytoolkitRelyingpartySignupNewUserRequest{}
-
 	if err := user.preparePayload(request); err != nil {
 		return "", err
 	}
@@ -532,9 +592,8 @@ func (c *Client) createUser(ctx context.Context, user *UserToCreate) (string, er
 	c.setHeader(call)
 	resp, err := call.Context(ctx).Do()
 	if err != nil {
-		return "", err
+		return "", handleServerError(err)
 	}
-
 	return resp.LocalId, nil
 }
 
@@ -555,9 +614,10 @@ func (c *Client) updateUser(ctx context.Context, uid string, user *UserToUpdate)
 
 	call := c.is.Relyingparty.SetAccountInfo(request)
 	c.setHeader(call)
-	_, err := call.Context(ctx).Do()
-
-	return err
+	if _, err := call.Context(ctx).Do(); err != nil {
+		return handleServerError(err)
+	}
+	return nil
 }
 
 func (c *Client) getUser(ctx context.Context, request *identitytoolkit.IdentitytoolkitRelyingpartyGetAccountInfoRequest) (*UserRecord, error) {
@@ -565,10 +625,21 @@ func (c *Client) getUser(ctx context.Context, request *identitytoolkit.Identityt
 	c.setHeader(call)
 	resp, err := call.Context(ctx).Do()
 	if err != nil {
-		return nil, err
+		return nil, handleServerError(err)
 	}
 	if len(resp.Users) == 0 {
-		return nil, fmt.Errorf("cannot find user given params: id:%v, phone:%v, email: %v", request.LocalId, request.PhoneNumber, request.Email)
+		var msg string
+		if len(request.LocalId) == 1 {
+			msg = fmt.Sprintf("cannot find user from uid: %q", request.LocalId[0])
+		} else if len(request.Email) == 1 {
+			msg = fmt.Sprintf("cannot find user from email: %q", request.Email[0])
+		} else if len(request.PhoneNumber) == 1 {
+			msg = fmt.Sprintf("cannot find user from phone number: %q", request.PhoneNumber[0])
+		} else {
+			msg = fmt.Sprintf("cannot find user given params: id: %v, phone: %v, email: %v",
+				request.LocalId, request.PhoneNumber, request.Email)
+		}
+		return nil, internal.Errorf(UserNotFoundError, msg)
 	}
 
 	eu, err := makeExportedUser(resp.Users[0])
@@ -581,8 +652,7 @@ func (c *Client) getUser(ctx context.Context, request *identitytoolkit.Identityt
 func makeExportedUser(r *identitytoolkit.UserInfo) (*ExportedUserRecord, error) {
 	var cc map[string]interface{}
 	if r.CustomAttributes != "" {
-		err := json.Unmarshal([]byte(r.CustomAttributes), &cc)
-		if err != nil {
+		if err := json.Unmarshal([]byte(r.CustomAttributes), &cc); err != nil {
 			return nil, err
 		}
 		if len(cc) == 0 {
@@ -627,4 +697,21 @@ func makeExportedUser(r *identitytoolkit.UserInfo) (*ExportedUserRecord, error) 
 		PasswordSalt: r.Salt,
 	}
 	return resp, nil
+}
+
+func handleServerError(err error) *internal.FirebaseError {
+	var serverCode string
+	gerr, ok := err.(*googleapi.Error)
+	if ok {
+		serverCode = gerr.Message
+	}
+	var code, msg string
+	info, ok := serverError[serverCode]
+	if ok {
+		code, msg = info.Code, info.Message
+	} else {
+		code = UnknownError
+		msg = "server responded with an unknown error"
+	}
+	return internal.Errorf(code, "%s; %v", msg, err)
 }

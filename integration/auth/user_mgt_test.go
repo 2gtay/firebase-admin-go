@@ -25,6 +25,7 @@ import (
 
 	"google.golang.org/api/iterator"
 
+	firebase "firebase.google.com/go"
 	"firebase.google.com/go/auth"
 )
 
@@ -117,6 +118,13 @@ func testGetUser(t *testing.T) {
 	}
 	if !reflect.DeepEqual(u, want) {
 		t.Errorf("GetUser(UID) = %#v; want = %#v", u, want)
+	}
+
+	u, err = client.GetUser(context.Background(), "nonexisting")
+	if err == nil {
+		t.Errorf("GetUser(nonexisting) = (%v, nil); want = (nil, error)", u)
+	} else if firebase.Code(err) != auth.UserNotFoundError {
+		t.Errorf("GetUser(nonexisting) = %q; want = %q", firebase.Code(err), auth.UserNotFoundError)
 	}
 }
 

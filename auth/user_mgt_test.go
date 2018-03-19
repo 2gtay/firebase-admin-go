@@ -28,6 +28,7 @@ import (
 
 	"golang.org/x/net/context"
 
+	firebase "firebase.google.com/go"
 	"firebase.google.com/go/internal"
 
 	"golang.org/x/oauth2"
@@ -149,24 +150,22 @@ func TestGetNonExistingUser(t *testing.T) {
 	s := echoServer([]byte(resp), t)
 	defer s.Close()
 
-	want := "cannot find user given params: id:[%s], phone:[%s], email: [%s]"
-
-	we := fmt.Sprintf(want, "id-nonexisting", "", "")
+	we := `cannot find user from uid: "id-nonexisting"`
 	user, err := s.Client.GetUser(context.Background(), "id-nonexisting")
-	if user != nil || err == nil || err.Error() != we {
+	if user != nil || err == nil || err.Error() != we || firebase.Code(err) != UserNotFoundError {
 		t.Errorf("GetUser(non-existing) = (%v, %q); want = (nil, %q)", user, err, we)
 	}
 
-	we = fmt.Sprintf(want, "", "", "foo@bar.nonexisting")
+	we = `cannot find user from email: "foo@bar.nonexisting"`
 	user, err = s.Client.GetUserByEmail(context.Background(), "foo@bar.nonexisting")
-	if user != nil || err == nil || err.Error() != we {
+	if user != nil || err == nil || err.Error() != we || firebase.Code(err) != UserNotFoundError {
 		t.Errorf("GetUserByEmail(non-existing) = (%v, %q); want = (nil, %q)", user, err, we)
 	}
 
-	we = fmt.Sprintf(want, "", "+12345678901", "")
+	we = `cannot find user from phone number: "+12345678901"`
 	user, err = s.Client.GetUserByPhoneNumber(context.Background(), "+12345678901")
-	if user != nil || err == nil || err.Error() != we {
-		t.Errorf("GetUserPhoneNumber(non-existing) = (%v, %q); want = (nil, %q)", user, err, we)
+	if user != nil || err == nil || err.Error() != we || firebase.Code(err) != UserNotFoundError {
+		t.Errorf("GetUserByPhoneNumber(non-existing) = (%v, %q); want = (nil, %q)", user, err, we)
 	}
 }
 
@@ -642,7 +641,6 @@ func TestInvalidDeleteUser(t *testing.T) {
 }
 
 func TestMakeExportedUser(t *testing.T) {
-
 	rur := &identitytoolkit.UserInfo{
 		LocalId:          "testuser",
 		Email:            "testuser@example.com",
@@ -703,8 +701,25 @@ func TestHTTPError(t *testing.T) {
 		t.Fatalf("GetUser() = (%v, %v); want = (nil, error)", u, err)
 	}
 
-	want := `googleapi: got HTTP response code 500 with body: {"error":"test"}`
-	if err.Error() != want {
+	want := `server responded with an unknown error; googleapi: got HTTP response code 500 with body: {"error":"test"}`
+	if firebase.Code(err) != UnknownError || err.Error() != want {
+		t.Errorf("GetUser() = %v; want = %q", err, want)
+	}
+}
+
+func TestHTTPErrorWithCode(t *testing.T) {
+	s := echoServer([]byte(`{"error":{"message":"INSUFFICIENT_PERMISSION"}}`), t)
+	defer s.Close()
+	s.Status = http.StatusInternalServerError
+
+	u, err := s.Client.GetUser(context.Background(), "some uid")
+	if u != nil || err == nil {
+		t.Fatalf("GetUser() = (%v, %v); want = (nil, error)", u, err)
+	}
+
+	want := `the credential used to initialize the Admin SDK has insufficient permission to access ` +
+		`the requested resource; googleapi: Error 500: INSUFFICIENT_PERMISSION`
+	if firebase.Code(err) != InsufficientPermissionError || err.Error() != want {
 		t.Errorf("GetUser() = %v; want = %q", err, want)
 	}
 }
